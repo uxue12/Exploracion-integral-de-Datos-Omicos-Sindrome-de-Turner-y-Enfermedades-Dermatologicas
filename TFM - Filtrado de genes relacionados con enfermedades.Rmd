@@ -1,0 +1,258 @@
+---
+title: "Filtrado de genes"
+author: "Uxue Alvarez Huesa"
+date: "2024-01-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Filtrado de genes
+
+## Filtrado de genes melanoma
+
+```{r}
+# Instala la biblioteca si aún no está instalada
+if (!requireNamespace("sqldf", quietly = TRUE)) {
+  install.packages("sqldf")
+}
+
+# Carga la biblioteca
+library(sqldf)
+library(readxl)
+library(openxlsx)
+```
+
+```{r}
+ruta_melanoma <- "E:/TFM/genes_melanoma.xlsx"
+genes_melanoma <- read_excel(ruta_melanoma)
+```
+
+```{r}
+# Consulta SQL para filtrar genes que cumplen al menos tres condiciones
+query_melanoma <- "SELECT * FROM genes_melanoma 
+          WHERE 
+            (CASE WHEN Puntuacion >= 0.300 THEN 1 ELSE 0 END +
+             CASE WHEN Nivel = 'Strong' THEN 1 ELSE 0 END +
+             CASE WHEN GWAS = 'Si' THEN 1 ELSE 0 END +
+             CASE WHEN NCBI = 'Si' THEN 1 ELSE 0 END +
+             CASE WHEN Referencias >= 5 THEN 1 ELSE 0 END +
+             CASE WHEN Affected >= 0.2 THEN 1 ELSE 0 END +
+             CASE WHEN Frequency >= 0.2 THEN 1 ELSE 0 END) >= 3"
+
+# Aplica la consulta y crea un nuevo data frame
+genes_melanoma_filtrado <- sqldf(query_melanoma)
+
+# Imprime el nuevo data frame con los genes que cumplen al menos tres condiciones
+genes_melanoma_filtrado
+```
+
+```{r}
+# Se guardan los genes del melanoma filtrados en un archivo excel
+write.xlsx(genes_melanoma_filtrado, file = "E:/TFM/genes_melanoma_filtrado.xlsx")
+```
+
+
+## Filtrado de genes nevus melanocítico
+
+```{r}
+ruta_nevus <- "E:/TFM/genes_nevus.xlsx"
+genes_nevus<- read_excel(ruta_nevus)
+```
+
+```{r}
+# Consulta SQL para filtrar genes que cumplen al menos una condición
+query_nevus <- "SELECT * FROM genes_nevus
+          WHERE 
+            (CASE WHEN Puntuacion >= 0.100 THEN 1 ELSE 0 END +
+             CASE WHEN Nivel = 'Strong' THEN 1 ELSE 0 END +
+             CASE WHEN GWAS = 'Si' THEN 1 ELSE 0 END +
+             CASE WHEN NCBI = 'Si' THEN 1 ELSE 0 END +
+             CASE WHEN Referencias >= 2 THEN 1 ELSE 0 END) >= 1"
+
+# Aplica la consulta y crea un nuevo data frame
+genes_nevus_filtrado <- sqldf(query_nevus)
+
+# Imprime el nuevo data frame con los genes que cumplen al menos una condición
+genes_nevus_filtrado
+```
+
+
+## Filtrado de genes psoriasis
+
+```{r}
+ruta_psoriasis <- "E:/TFM/genes_psoriasis.xlsx"
+genes_psoriasis <- read_excel(ruta_psoriasis)
+```
+
+```{r}
+# Consulta SQL para filtrar genes que cumplen al menos dos condiciones
+query_psoriasis <- "SELECT * FROM genes_psoriasis 
+          WHERE 
+            (CASE WHEN Puntuacion >= 0.300 THEN 1 ELSE 0 END +
+             CASE WHEN Nivel = 'Strong' THEN 1 ELSE 0 END +
+             CASE WHEN GWAS = 'Si' THEN 1 ELSE 0 END +
+             CASE WHEN NCBI = 'Si' THEN 1 ELSE 0 END +
+             CASE WHEN Referencias >= 5 THEN 1 ELSE 0 END) >= 2"
+
+# Aplica la consulta y crea un nuevo data frame
+genes_psoriasis_filtrado <- sqldf(query_psoriasis)
+
+# Imprime el nuevo data frame con los genes que cumplen al menos dos condiciones
+genes_psoriasis_filtrado
+```
+
+## Filtrado de genes alopecia
+
+```{r}
+ruta_alopecia <- "E:/TFM/genes_alopecia.xlsx"
+genes_alopecia <- read_excel(ruta_alopecia)
+```
+
+```{r}
+# Consulta SQL para filtrar genes que cumplen al menos dos condiciones
+query_alopecia <- "SELECT * FROM genes_alopecia
+          WHERE 
+            (CASE WHEN Puntuacion >= 0.300 THEN 1 ELSE 0 END +
+             CASE WHEN Nivel = 'Strong' THEN 1 ELSE 0 END +
+             CASE WHEN GWAS = 'Si' THEN 1 ELSE 0 END +
+             CASE WHEN NCBI = 'Si' THEN 1 ELSE 0 END +
+             CASE WHEN Referencias >= 5 THEN 1 ELSE 0 END) >= 2"
+
+# Aplica la consulta y crea un nuevo data frame
+genes_alopecia_filtrado <- sqldf(query_alopecia)
+
+# Imprime el nuevo data frame con los genes que cumplen al menos dos condiciones
+genes_alopecia_filtrado
+```
+
+## Filtrado de genes vitiligo
+
+```{r}
+ruta_vitiligo <- "E:/TFM/genes_vitiligo.xlsx"
+genes_vitiligo <- read_excel(ruta_vitiligo)
+```
+
+```{r}
+# Consulta SQL para filtrar genes que cumplen al menos dos condiciones
+query_vitiligo <- "SELECT * FROM genes_vitiligo
+          WHERE 
+            (CASE WHEN Puntuacion >= 0.300 THEN 1 ELSE 0 END +
+             CASE WHEN Nivel = 'Strong' THEN 1 ELSE 0 END +
+             CASE WHEN GWAS = 'Si' THEN 1 ELSE 0 END +
+             CASE WHEN NCBI = 'Si' THEN 1 ELSE 0 END +
+             CASE WHEN Referencias >= 5 THEN 1 ELSE 0 END) >= 2"
+
+# Aplica la consulta y crea un nuevo data frame
+genes_vitiligo_filtrado <- sqldf(query_vitiligo)
+
+# Imprime el nuevo data frame con los genes que cumplen al menos dos condiciones
+genes_vitiligo_filtrado
+```
+
+
+## Filtrado de genes vitiligo
+
+```{r}
+ruta_cutisverticisgyrata <- "E:/TFM/genes_cutisverticisgyrata.xlsx"
+genes_cutisverticisgyrata <- read_excel(ruta_cutisverticisgyrata)
+```
+
+```{r}
+# Consulta SQL para filtrar genes que cumplen al menos una condición
+query_cutisverticisgyrata <- "SELECT * FROM genes_cutisverticisgyrata
+          WHERE 
+            (CASE WHEN Puntuacion >= 0.300 THEN 1 ELSE 0 END +
+             CASE WHEN Nivel = 'Strong' THEN 1 ELSE 0 END +
+             CASE WHEN GWAS = 'Si' THEN 1 ELSE 0 END +
+             CASE WHEN NCBI = 'Si' THEN 1 ELSE 0 END +
+             CASE WHEN Referencias >= 2 THEN 1 ELSE 0 END) >= 1"
+
+# Aplica la consulta y crea un nuevo data frame
+genes_cutisverticisgyrata_filtrado <- sqldf(query_cutisverticisgyrata)
+
+# Imprime el nuevo data frame con los genes que cumplen al menos una condición
+genes_cutisverticisgyrata_filtrado
+```
+
+## Filtrado de genes cutis verticis gyrata
+
+```{r}
+ruta_cutisverticisgyrata <- "E:/TFM/genes_cutisverticisgyrata.xlsx"
+genes_cutisverticisgyrata <- read_excel(ruta_cutisverticisgyrata)
+```
+
+```{r}
+# Consulta SQL para filtrar genes que cumplen al menos una condición
+query_cutisverticisgyrata <- "SELECT * FROM genes_cutisverticisgyrata
+          WHERE 
+            (CASE WHEN Puntuacion >= 0.300 THEN 1 ELSE 0 END +
+             CASE WHEN Nivel = 'Strong' THEN 1 ELSE 0 END +
+             CASE WHEN GWAS = 'Si' THEN 1 ELSE 0 END +
+             CASE WHEN NCBI = 'Si' THEN 1 ELSE 0 END +
+             CASE WHEN Referencias >= 2 THEN 1 ELSE 0 END) >= 1"
+
+# Aplica la consulta y crea un nuevo data frame
+genes_cutisverticisgyrata_filtrado <- sqldf(query_cutisverticisgyrata)
+
+# Imprime el nuevo data frame con los genes que cumplen al menos una condición
+genes_cutisverticisgyrata_filtrado
+```
+
+
+## Filtrado de genes polimatrixoma
+
+```{r}
+ruta_polimatrixoma <- "E:/TFM/genes_polimatrixoma.xlsx"
+genes_polimatrixoma <- read_excel(ruta_polimatrixoma)
+```
+
+```{r}
+# Consulta SQL para filtrar genes que cumplen al menos una condición
+query_polimatrixoma <- "SELECT * FROM genes_polimatrixoma
+          WHERE 
+            (CASE WHEN Puntuacion >= 0.100 THEN 1 ELSE 0 END +
+             CASE WHEN Nivel = 'Strong' THEN 1 ELSE 0 END +
+             CASE WHEN GWAS = 'Si' THEN 1 ELSE 0 END +
+             CASE WHEN NCBI = 'Si' THEN 1 ELSE 0 END +
+             CASE WHEN Referencias >= 2 THEN 1 ELSE 0 END) >= 1"
+
+# Aplica la consulta y crea un nuevo data frame
+genes_polimatrixoma_filtrado <- sqldf(query_polimatrixoma)
+
+# Imprime el nuevo data frame con los genes que cumplen al menos una condición
+genes_polimatrixoma_filtrado
+```
+
+# Lista total de los genes filtrados
+
+```{r}
+genes_filtrado <- rbind(genes_alopecia_filtrado, genes_cutisverticisgyrata_filtrado, genes_nevus_filtrado, genes_polimatrixoma_filtrado, genes_psoriasis_filtrado, genes_vitiligo_filtrado)
+genes_filtrado
+```
+
+```{r}
+# Seleccionar solo las columnas comunes
+columnas_comunes <- intersect(names(genes_melanoma_filtrado), names(genes_filtrado))
+
+# Unir las tablas verticalmente utilizando solo las columnas comunes
+genes_filtrado_completo <- rbind(genes_melanoma_filtrado[, columnas_comunes], genes_filtrado[, columnas_comunes])
+
+# Eliminar filas duplicadas según la columna "Gen"
+genes_filtrado <- genes_filtrado_completo[!duplicated(genes_filtrado_completo$Gen), ]
+
+# Ordenar la tabla alfabéticamente según la columna "Gen"
+genes_filtrado <- genes_filtrado[order(genes_filtrado$Gen), ]
+
+# Imprimir la tabla resultante
+genes_filtrado
+```
+ 
+ Se guarda la lista de genes filtrados en un archivo xlsx.
+ 
+```{r}
+write.xlsx(genes_filtrado, file = "E:/TFM/genes_filtrado.xlsx")
+```
+ 

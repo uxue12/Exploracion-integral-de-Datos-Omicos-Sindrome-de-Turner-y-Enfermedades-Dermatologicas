@@ -1,0 +1,1180 @@
+---
+title: "TFM - Análisis de expresión diferencial"
+author: "Uxue Alvarez Huesa"
+date: '`r format(Sys.Date(), "%e de %B, %Y")`'
+output: 
+  pdf_document: 
+    latex_engine: xelatex 
+    toc: yes
+    toc_depth: 2
+  html_document:
+    toc: yes
+    toc_depth: 2
+    toc_float: yes
+    df_print: paged
+lang: es
+---
+
+# Análisis diferencial genómico de una base de datos
+
+En este informe se va a realizar un análisis de microarrays a partir de datos de un estudio publicado y depositados en "*Gene Expression Omnibus*". El estudio que se ha seleccionado es el codificado con el identificador GEO **GSE46687** el cuál analiza la expresión génica diferencial en células mononucleares de sangre periférica (PBMC) de 45Xm y 45Xp  mediante microarrays. También se analiza en paralelo la expresión génica de las mujeres control 46XX para investigar los cambios en la expresión génica de todo el genoma entre los pacientes con Síndrome de Turner con monosomía X y las mujeres sin monosomía (sin tener en cuenta el tipo de herencia del cromosoma X). 
+
+## Carga de librerías 
+
+Antes de empezar con el análisis se cargan los paquetes necesarios, instalados previamente.
+
+```{r carga de paquetes, warning = FALSE, message = FALSE}
+library(affycoretools)
+library(annotate)
+library(AnnotationDbi)
+library(arrayQualityMetrics)
+library(Biobase)
+library(cluster)
+library(clusterProfiler)
+library(dplyr)
+library(enrichplot)
+library(genefilter)
+library(ggplot2)
+library(GOstats)
+library(gplots)
+library(limma)
+library(oligo)
+library(oligoClasses)
+library(openxlsx)
+library(org.Hs.eg.db)
+library(pvca)
+library(reactome.db)
+library(ReactomePA)
+library(readxl)
+library(xtable)
+```
+
+## Selección del dataset
+
+Se ha seleccionado el dataset GSE46687, el cuál corresponde al trabajo de Cheng CM *et al.* llamado Gene Expression Profiling in 45X Turner Syndrome patients. 
+
+El estudio se compone de 36 muestras y las anotaciones de los genes se encuentran en *Affymetrix Human Genome U133 Plus 2.0 Array*. Estas 36 muestras se dividen en:
+
+- **XX**: 10 réplicas de muestras de control (*wild type*).
+
+- **Xm**: 16 réplicas de muestras con Síndrome de Turner con el cromosoma X heredado de la madre 
+ 
+- **Xp**: 10 réplicas de muestras con Síndrome de Turner con el cromosoma X heredado del padre 
+
+Por lo tanto, se tienen 3 tipos de muestras, una que pertenece al control sin monosomía del cromosoma X y, por lo tanto, Síndrome de Turner (XX) y dos tipos de genotipos de Síndrome de Turner (monosomía del cromosoma X); estos dos tipos de monosomía se dividen en si el cromosoma X ha sido heredado por parte de la madre (Xm) o del padre (Xp).
+
+Teniendo esto en cuenta, para facilitar el análisis primero se va a analizar la diferencia de expresión genómica entre los individuos con Síndrome de Turner (Xm y Xp), para poder concluir si estas muestras se pueden unir y compararlas conjuntamente con las muestras de control o si, por el contrario, se debe realizar el estudio comparándolos individualmente con el control. Esto hará que resulte más fácil crear la matríz de correlación. 
+
+## Análisis de expresión diferencial genómica entre genotipos de Síndrome de Turner Xm y Xp
+
+### Creación del objeto “targets”
+
+En la carpeta `Data` donde se encuentran los archivos .CEL, se ha creado un archivo .csv llamado `targets1`. Este archivo contiene la información de las diferentes muestras del experimento para poder crear un objeto *AnnotatedDataFrame*.
+
+![Contenido del inicio del archivo targets1.csv](E:/TFM/Captura3.jpg) 
+
+Para organizar el estudio se han creado algunos directorios: 
+
+```{r}
+workingDir <- getwd()
+dataDir <- file.path(workingDir, "Data")
+```
+
+`dataDir` será el directorio donde están guardados los datos del análisis.
+
+### Carga y lectura de datos 
+
+Para poder comenzar con el preprocesado de los datos, primero se lee el archivo `targets1.csv` y se almacenan las columnas `ShortName` y `Colors` de este archivo en dos nuevas variables (`sampleNames1` y `sampleColor1`) para poder crear los gráficos posteriormente. Como se puede observar, el objeto `targetsDF1` contiene el dataframe que se ha creado anteriormente con la información de las muestras y algunos campos importantes para el análisis.
+
+```{r creacion de la variable targetsDF1, sampleNames1 y sampleColor1}
+# Carga del archivo CSV que contiene la información de las muestras a analizar (targets)
+targetsDF1 <- read.csv2(file = file.path(dataDir, "targets1.csv"), header = TRUE, sep = ";")
+
+# Extracción de las abreviaturas de los nombres y colores de las muestras del data frame 'targetsDF1'
+sampleNames1 <- as.character(targetsDF1$ShortName)
+sampleColor1 <- as.character(targetsDF1$Colors)
+
+# Creación de un objeto AnnotatedDataFrame a partir de 'targetsDF1' para asociar información adicional con las muestras
+targets1 <- AnnotatedDataFrame(targetsDF1)
+
+# Muestra del contenido del dataframe targetsDF1
+targetsDF1
+```
+
+A continuación, se guardan los nombres de los archivos .CEL guardados en el dataframe `targetsDF1` en un nuevo objeto llamado `CELfiles1` y se cargan los archivos del directorio que tengan el mismo nombre que los guardados en ese objeto. Estos archivos se almacenan en un objeto ExpressionFeatureSet llamado `rawData1`. 
+
+
+```{r creacion de rawData1, warning = FALSE, message = FALSE}
+# Extracción de los nombres de los archivos CEL desde la columna 'fileName' del data frame 'targetsDF1'
+CELfiles1 <- targetsDF1$fileName
+
+# Lee los archivos CEL ubicados en 'dataDir', utilizando los nombres extraídos en CELfiles1
+# Mediante read.celfiles() se leen los archivos CEL y se devuelve un objeto ExpressionFeatureSet (rawData1)
+# phenoData se asocia con el objeto AnnotatedDataFrame creado previamente ('targets1'), donde se encuentra la información fenotípica de las muestras
+rawData1 <- read.celfiles(file.path(dataDir, CELfiles1), phenoData = targets1)
+```
+
+Una vez cargados todos los archivos, se analiza el objeto ExpressionFeatureSet `rawData1`.
+
+
+```{r}
+rawData1
+```
+
+Como se puede observar, el archivo contiene 26 muestras, ya que se han eliminado las muestras que pertenecen al control, las cuáles hacen una suma de 1354896 sondas en total. Además, `Annotation` indica el paquete de anotaciones necesario para poder realizar este análisis, en este caso **hgu133plus2 .db**.
+
+### Preprocesado de los datos
+
+
+#### Exploración y control de calidad
+
+Mediante un **boxplot** se muestra como es la distribución de los valores. 
+
+
+```{r boxplot rawData 1, echo = FALSE}
+boxplot(rawData1, which = "all", las = 2, main = "Distribución de intensidad de Xm vs Xp", cex.axis = 0.7, col = sampleColor1, names = sampleNames1)
+```
+
+Mediante un **clustering jerárquico** se muestra como se agrupan estas muestras. Para realizar esta gráfica, primero se calcula la distancia euclidiana entre las muestras de la matríz de expresión de `rawData1`, mediante `t()` se transpone la matriz para que las distancias se calculen entre las muestras en lugar de los genes. Mediante `hclust()` 
+se realiza un clustering jerárquico con los datos modificados anteriormente utilizando el método "average". Para finalizar, se muestra el dendrograma resultante del clustering jerárquico.
+
+
+```{r clustering rawData1, echo = FALSE}
+clust.euclid.average1 <- hclust(dist(t(exprs(rawData1))), method = "average")
+plot(clust.euclid.average1, labels = sampleNames1, main = "Clustering jerárquico de Xm vs Xp", cex = 0.7, hang = -1)
+```
+
+
+En el **análisis de componentes principales**, se buscan las principales fuentes de variabilidad en los datos reduciendo las dimensiones. Esta gráfica se realiza empleando la función `plotPCA()` del paquete de Bioconductor `affycoretools`
+
+
+```{r PCA rawData1, warning = FALSE, message = FALSE, echo = FALSE}
+targetsDF1$Grupos <- as.factor(targetsDF1$Grupos)
+affycoretools::plotPCA(object = exprs(rawData1), groups = as.numeric(targetsDF1$Grupos), x.coord = NULL, y.coord = NULL, addtext = targetsDF1$ShortName, main = "PCA de Xm vs Xp", legend = FALSE)
+```
+
+
+##### Control de calidad con el paquete arrayQualityMetrics
+
+Con este paquete se obtienen los mismos gráficos que los anteriores pero todos a la vez en un archivo. 
+
+
+```{r arrayqualitymetrics rawData1, eval = FALSE}
+arrayQualityMetrics(rawData1, reporttitle = "QC_RawData1", force = TRUE)
+```
+
+
+#### Normalización
+
+Antes de comenzar con el análisis de expresión diferencial, es necesario hacer que los arrays sean comparables entre sí y tratar de reducir, y si es posible eliminar, toda la variabilidad en las muestras que no se deba a razones biológicas. El proceso de normalización trata de asegurar que las diferencias de intensidad presentes en el array reflejen la expresión diferencial de los genes, en lugar de sesgos artificiales debidos a cuestiones técnicas. El método más utilizado para la normalización de arrays es el método RMA.
+
+```{r normalizacion de rawData1}
+normData1 <- rma(rawData1)
+normData1
+```
+
+
+Tras la normalización de los datos  se obtienen menos sondas en el ExpressionSet `normData1` que en el archivo `rawData1`. Esto se debe a que en `rawData1` este número hace referencia a las sondas individuales, mientras que el objeto `normData1` hace referencia a los grupos de sondas. 
+
+Analizando la calidad de los datos tras la normalización:
+
+
+```{r boxplot normData1, echo = FALSE}
+boxplot(normData1, las = 2, main = "Distribución de intensidad de normalized Xm vs Xp", cex.axis = 0.7, col = sampleColor1, names = sampleNames1)
+```
+
+Además, se crea un nuevo archivo QC mediante el paquete `arrayQualityMetrics` para los datos normalizados.
+
+
+```{r arrayqualitymetrics normData1, eval = FALSE}
+arrayQualityMetrics(normData1, reporttitle = "QC_NormData1", force = TRUE)
+```
+
+Se elimina la muestra que tiene porblemas de valores atípicos y se vuelven a cargar y normalizar lo datos.
+
+
+### Carga y lectura de los datos 
+
+
+```{r targetsDF1, sampleNames1 y sampleColor1 nuevos}
+targetsDF1 <- read.csv2(file = file.path(dataDir, "targets1.1.csv"), header = TRUE, sep = ";")
+
+sampleNames1 <- as.character(targetsDF1$ShortName)
+sampleColor1 <- as.character(targetsDF1$Colors)
+
+targets1 <- AnnotatedDataFrame(targetsDF1)
+
+targetsDF1
+```
+
+
+A continuación, se guardan los nombres de los archivos .CEL guardados en el dataframe `targetsDF2` en un nuevo objeto llamado `CELfiles2` y se cargan los archivos del directorio que tengan el mismo nombre que los guardados en ese objeto. Estos archivos se almacenan en un objeto ExpressionFeatureSet llamado `rawData2`. 
+
+```{r creacion de rawData1 nuevo         , warning = FALSE, message = FALSE}
+CELfiles1 <- targetsDF1$fileName
+rawData1 <- read.celfiles(file.path(dataDir, CELfiles1), phenoData = targets1)
+```
+
+
+```{r rawData1 nuevo, warning = FALSE, message = FALSE}
+rawData1
+```
+
+Como se puede observar, el archivo contiene 25 muestras, ya que se ha eliminado la muestra con problemas de outliers. Además, `Annotation` indica el paquete de anotaciones necesario para poder realizar este análisis, el mismo que se ha utilizado anteriormente.
+
+
+### Preprocesado de los datos
+
+
+#### Exploración y control de calidad
+
+Mediante un **boxplot** se muestra como es la distribución de los valores. 
+
+```{r boxplot rawData1 nuevo, echo = FALSE}
+boxplot(rawData1, las = 2, main = "Distribución de intensidad de Xm vs Xp", cex.axis = 0.7, col = sampleColor1, names = sampleNames1)
+```
+
+
+Mediante un **clustering jerárquico** se muestra como se agrupan estas muestras. 
+
+```{r clustering rawData1 nuevo, echo = FALSE}
+clust.euclid.average1 <- hclust(dist(t(exprs(rawData1))), method = "average")
+plot(clust.euclid.average1, labels = sampleNames1, main = "Clustering jerárquico de Xm vs Xp", cex = 0.7, hang = -1)
+```
+
+
+En el **análisis de componentes principales**, se buscan las principales fuentes de variabilidad en los datos reduciendo las dimensiones.
+
+```{r PCA rawData1 nuevo, warning = FALSE, message = FALSE, echo = FALSE}
+targetsDF1$Grupos <- as.factor(targetsDF1$Grupos)
+affycoretools::plotPCA(object = exprs(rawData1), groups = as.numeric(targetsDF1$Grupos), x.coord = NULL, y.coord = NULL, addtext = targetsDF1$ShortName, main = "PCA de Xm vs Xp", legend = FALSE)
+```
+
+
+### Normalización
+
+Antes de comenzar con el análisis de expresión diferencial y vistos los problemas que muestran algunas de las muestras, es necesario hacer normalizar los arrays con el método RMA.
+
+```{r normData1 nuevo}
+normData1 <- rma(rawData1)
+normData1
+```
+
+
+Analizando la calidad de los datos tras la normalización:
+
+```{r boxplot normData1 nuevo, echo =  FALSE}
+boxplot(normData1, las = 2, main = "Distribución de intensidad de normalized Xm vs Xp", cex.axis = 0.7, col = sampleColor1, names = sampleNames1)
+```
+
+
+Además, se muestra el **clustering jerárquico** de las muestras normalizadas para analizar como se agrupan.
+
+```{r clustering normData1 nuevo, echo = FALSE}
+clust.euclid.average1 <- hclust(dist(t(exprs(normData1))), method = "average")
+plot(clust.euclid.average1, labels = sampleNames1, main = "Clustering jerárquico de normalized Xm vs Xp", cex = 0.7, hang = -1)
+```
+
+
+Representando el PCA de los datos normalizados: 
+
+```{r PCA normData1 nuevo, warning = FALSE, message = FALSE, echo = FALSE}
+affycoretools::plotPCA(object = exprs(normData1), groups = as.numeric(targetsDF1$Grupos), x.coord = NULL, y.coord = NULL, addtext = targetsDF1$ShortName, main = "PCA de normalized Xm vs Xp", legend = FALSE)
+```
+
+
+Volviendo a realizar el informe de control de calidad para ver si ya no existe ninguna muestra con probelmas de valores atípicos: 
+
+```{r arrayqualitymetrics normData1 nuevo, eval = FALSE}
+arrayQualityMetrics(normData1, reporttitle = "QC_NormData1.1", force = TRUE)
+```
+
+
+#### Filtrado no específico
+
+```{r filtrado no especifico de normData1}
+annotation(normData1) <- "hgu133plus2.db"
+normData_filtered1 <- nsFilter(normData1, var.func = IQR, var.cutoff = 0.75, var.filter = TRUE, require.entrez = TRUE, filterByQuantile = TRUE, feature.exclude = "^AFFX")
+
+normData_filtered1
+```
+
+
+Analizando los resultados obtenidos, se han eliminado los siguientes genes: 
+
+- `r normData_filtered1$filter.log$numDupsRemoved` valores duplicados
+
+- `r normData_filtered1$filter.log$numLowVar` genes que tienen baja variabilidad 
+
+- `r normData_filtered1$filter.log$numRemoved.ENTREZID` genes que no tienen ID Entrez
+
+Con este filtraje no específico se ha obtenido un dataset con menor número de genes, habiendo descartado los genes que con una alta probabilidad no van a estar relacionados con el estudio. 
+
+Los genes restantes se han almacenado en la variable `FilteredEset`.
+
+```{r matriz de expresion tras el filtrado filteredData1}
+filtered_normData1 <- normData_filtered1$eset
+filteredData1 <- exprs(filtered_normData1)
+colnames(filteredData1) <- pData(normData_filtered1$eset)$ShortName
+```
+
+
+### Análisis
+
+#### La matríz de diseño
+
+El primer paso para el análisis basado en modelos lineales es crear la matriz de diseño. Básicamente es una tabla que describe la asignación de cada muestra a un grupo o condición experimental. Tiene tantas filas como muestras y tantas columnas como grupos, ya que en este caso se necesita el modelo de un factor, teniendo 2 tipos de muestras que se diferencian solo en un único factor.
+
+```{r matriz de diseño 1}
+treat1 <- pData(filtered_normData1)$Grupos
+
+treat1 <- factor(treat1)
+design1 <- model.matrix(~0 + treat1)
+
+rownames(design1) <- sampleNames1
+colnames(design1) <- levels(treat1)
+
+design1
+```
+
+#### La matríz de contrastes: definición de comparaciones
+
+La matriz de contrastes se utiliza para describir las comparaciones entre grupos. Consta de tantas columnas como comparaciones y tantas filas como grupos. Una comparación entre grupos se representa mediante un "1" y un "-1" en las filas de grupos a comparar. 
+
+```{r matriz de contrastes 1}
+cont.matrix1 <- makeContrasts(Xm.vs.Xp = Xm - Xp, levels = design1)
+comparisonName1 <- "Efecto de la monosomía X heredada de la madre y el padre"
+cont.matrix1
+```
+
+
+#### Estimación del modelo y selección de genes
+
+Una vez definida la matriz de diseño y los contrastes, se puede proceder a estimar el modelo, estimar los contrastes y realizar las pruebas de significación que llevarán a decidir, para cada gen y cada comparación, si pueden considerarse de expresión diferencial. Para ello, se utilizará el paquete `limma`. 
+
+Toda la información relevante para la posterior exploración de los resultados se almacena en un objeto llamado `fit.main2`.
+
+```{r estimacion del modelo 1}
+fit1 <- lmFit(filteredData1, design1)
+fit.main1 <- contrasts.fit(fit1, cont.matrix1)
+fit.main1 <- eBayes(fit.main1)
+```
+
+
+El paquete `limma` implementa la función `topTable` que contiene, para un contraste dado, una lista de genes ordenados de menor a mayor p-valor que pueden considerarse de mayor a menor expresión diferencial. 
+
+Además, la instrucción `topTable2` puede aplicar un filtro automático, basado en dos criterios distintos, “log fold change (lfc)” y “p.value”. En este caso, se va a emplear el valor de lfc 1.2 y el p valor de 0.05.
+
+```{r topTab1}
+topTab1 <- topTable(fit.main1, number = nrow(fit.main1), coef = "Xm.vs.Xp", adjust = "fdr", lfc = 1.2, p.value = 0.05)
+
+dim(topTab1)
+```
+
+
+## Análisis de expresión diferencial genómica entre genotipos de Síndrome de Turner X (X = Xm y Xp) y las muestras control (XX)
+
+En este caso, no se van a comentar todos los pasos ya que el inicio del análisis es idéntico al análisis anterior.
+
+
+### Creación del objeto “targets”
+
+En la carpeta `Data` donde se encuentran los archivos .CEL, se ha creado un archivo .csv llamado "targets2". Este archivo contiene la información de las diferentes muestras del experimento para poder crear un objeto *AnnotatedDataFrame*.
+
+
+![Contenido del inicio del archivo targets2.csv](E:/TFM/Captura7.jpg) 
+
+
+### Carga y lectura de los datos 
+
+
+```{r targetsDF2, sampleNames2 y sampleColor2}
+targetsDF2 <- read.csv2(file = file.path(dataDir, "targets2.csv"), header = TRUE, sep = ";")
+
+sampleNames2 <- as.character(targetsDF2$ShortName)
+sampleColor2 <- as.character(targetsDF2$Colors)
+
+targets2 <- AnnotatedDataFrame(targetsDF2)
+
+targetsDF2
+```
+
+
+A continuación, se guardan los nombres de los archivos .CEL guardados en el dataframe `targetsDF2` en un nuevo objeto llamado `CELfiles2` y se cargan los archivos del directorio que tengan el mismo nombre que los guardados en ese objeto. Estos archivos se almacenan en un objeto ExpressionFeatureSet llamado `rawData2`. 
+
+
+```{r creacion de rawData2, warning = FALSE, message = FALSE}
+CELfiles2 <- targetsDF2$fileName
+rawData2 <- read.celfiles(file.path(dataDir, CELfiles2), phenoData = targets2)
+```
+
+```{r rawData2, warning = FALSE, message = FALSE}
+rawData2
+```
+
+
+Como se puede observar, el archivo contiene 36 muestras, ya que en este caso se tienen en cuenta todas las muestras. Además, `Annotation` indica el paquete de anotaciones necesario para poder realizar este análisis, el mismo que se ha utilizado anteriormente.
+
+
+### Preprocesado de los datos
+
+#### Exploración y control de calidad
+
+Mediante un **boxplot** se muestra como es la distribución de los valores. 
+
+```{r boxplot rawData2, echo = FALSE}
+boxplot(rawData2, which = "all", las = 2, main = "Distribución de intensidad de XO vs XX de un dataset", cex.axis = 0.7, col = sampleColor2, names = sampleNames2)
+```
+
+
+Mediante un **clustering jerárquico** se muestra como se agrupan estas muestras. 
+
+```{r clustering rawData2, echo = FALSE}
+clust.euclid.average2 <- hclust(dist(t(exprs(rawData2))), method = "average")
+plot(clust.euclid.average2, labels = sampleNames2, main = "Clustering jerárquico de XO vs XX de un dataset", cex = 0.7, hang = -1)
+```
+
+
+En el **análisis de componentes principales**, se buscan las principales fuentes de variabilidad en los datos reduciendo las dimensiones.
+
+```{r PCA rawData2, warning = FALSE, message = FALSE, echo = FALSE}
+targetsDF2$Grupos <- as.factor(targetsDF2$Grupos)
+affycoretools::plotPCA(object = exprs(rawData2), groups = as.numeric(targetsDF2$Grupos), x.coord = NULL, y.coord = NULL, addtext = targetsDF2$ShortName, main = "PCA de XO vs XX de un dataset", legend = FALSE)
+```
+
+
+##### Control de calidad con el paquete arrayQualityMetrics
+
+Con este paquete se obtienen los mismos gráficos que los anteriores pero todos a la vez en un archivo. Además, se observa si existe alguna muestra que tenga algún problema de outliers. 
+
+
+```{r arrayqualitymetrics rawData2, eval = FALSE}
+arrayQualityMetrics(rawData2, reporttitle = "QC_RawData2", force = TRUE)
+```
+
+
+#### Normalización
+
+Antes de comenzar con el análisis de expresión diferencial y vistos los problemas que muestran algunas de las muestras, es necesario hacer normalizar los arrays con el método RMA.
+
+```{r normData2}
+normData2 <- rma(rawData2)
+normData2
+```
+
+
+Analizando la calidad de los datos tras la normalización:
+
+```{r boxplot normData2, echo =  FALSE}
+boxplot(normData2, las = 2, main = "Distribución de intensidad de normalized XO vs XX de un dataset", cex.axis = 0.7, col = sampleColor2, names = sampleNames2)
+```
+
+
+Obteniendo el informe de control de calidad:
+
+```{r arrayqualitymetrics normData2, eval = FALSE}
+arrayQualityMetrics(normData2, reporttitle = "QC_NormData2", force = TRUE)
+```
+
+
+#### Filtrado no específico
+
+```{r filtrado no especifico de normData2}
+annotation(normData2) <- "hgu133plus2.db"
+normData_filtered2 <- nsFilter(normData2, var.func = IQR, var.cutoff = 0.75, var.filter = TRUE, require.entrez = TRUE, filterByQuantile = TRUE, feature.exclude = "^AFFX")
+
+normData_filtered2
+```
+
+Analizando los resultados obtenidos, se han eliminado los siguientes genes: 
+
+- `r normData_filtered2$filter.log$numDupsRemoved` valores duplicados
+
+- `r normData_filtered2$filter.log$numLowVar` genes que tienen baja variabilidad 
+
+- `r normData_filtered2$filter.log$numRemoved.ENTREZID` genes que no tienen ID Entrez
+
+Con este filtraje no específico se ha obtenido un dataset con menor número de genes, habiendo descartado los genes que con una alta probabilidad no van a estar relacionados con el estudio. 
+
+Los genes restantes se han almacenado en la variable `FilteredEset`.
+
+```{r matriz de expresion tras el filtrado filteredData2}
+filtered_normData2 <- normData_filtered2$eset
+filteredData2 <- exprs(filtered_normData2)
+colnames(filteredData2) <- pData(normData_filtered2$eset)$ShortName
+```
+
+
+### Análisis
+
+#### La matríz de diseño
+
+El primer paso para el análisis basado en modelos lineales es crear la matriz de diseño. Básicamente es una tabla que describe la asignación de cada muestra a un grupo o condición experimental. Tiene tantas filas como muestras y tantas columnas como grupos, ya que en este caso se necesita el modelo de un factor, teniendo 2 tipos de muestras que se diferencian solo en un único factor.
+
+```{r matriz de diseño 2}
+treat2 <- pData(filtered_normData2)$Grupos
+
+treat2 <- factor(treat2)
+design2 <- model.matrix(~0 + treat2)
+
+rownames(design2) <- sampleNames2
+colnames(design2) <- levels(treat2)
+
+design2
+```
+
+
+#### La matríz de contrastes: definición de comparaciones
+
+La matriz de contrastes se utiliza para describir las comparaciones entre grupos. Consta de tantas columnas como comparaciones y tantas filas como grupos. Una comparación entre grupos se representa mediante un "1" y un "-1" en las filas de grupos a comparar. 
+
+```{r matriz de contrastes 2}
+cont.matrix2 <- makeContrasts(XO.vs.XX = XO - XX, levels = design2)
+comparisonName2 <- "Efecto de la monosomía XO frente al control XX"
+cont.matrix2
+```
+
+
+#### Estimación del modelo y selección de genes
+
+Una vez definida la matriz de diseño y los contrastes, se puede proceder a estimar el modelo, estimar los contrastes y realizar las pruebas de significación que llevarán a decidir, para cada gen y cada comparación, si pueden considerarse de expresión diferencial. Para ello, se utilizará el paquete `limma`. 
+
+Toda la información relevante para la posterior exploración de los resultados se almacena en un objeto llamado `fit.main2`.
+
+```{r estimacion del modelo 2}
+fit2 <- lmFit(filteredData2, design2)
+fit.main2 <- contrasts.fit(fit2, cont.matrix2)
+fit.main2 <- eBayes(fit.main2)
+```
+
+
+El paquete `limma` implementa la función `topTable` que contiene, para un contraste dado, una lista de genes ordenados de menor a mayor p-valor que pueden considerarse de mayor a menor expresión diferencial. 
+
+Además, la instrucción `topTable2` puede aplicar un filtro automático, basado en dos criterios distintos, “log fold change (lfc)” y “p.value”. En este caso, se va a emplear el valor de lfc 1.2 y el p valor de 0.05.
+
+```{r topTab2}
+topTab2 <- topTable(fit.main2, number = nrow(fit.main2), coef = "XO.vs.XX", adjust = "fdr", lfc = 1.2, p.value = 0.05)
+
+dim(topTab2)
+```
+
+
+Con estos valores se obtienen 75 genes diferencialmente expresados entre los dos tipos de muestra. 
+
+
+#### Obtención de la lista de genes expresados diferencialmente
+
+Echando un vistazo a las primeras líneas del topTable, se pueden observar los genes que más cambian su expresión entre los dos grupos de muestras, ordenados por su p-valor (de menor a mayor).
+
+```{r mostrat topTab2}
+head(topTab2)
+```
+
+
+Como se puede observar, la primera columna del `topTable2` contiene el ID del fabricante (*Affymetrix*) para cada conjunto de sondas. El siguiente paso es adivinar qué gen corresponde a cada ID de Affymetrix, utilizando para ello la anotación de genes.
+
+
+#### Anotación de los genes 
+
+Una vez que se ha obtenido la tabla con los genes diferencialmente expresados, denominada `topTab2` es útil proporcionar información adicional sobre las características que se han seleccionado. Este proceso se denomina "anotación" y lo que hace es buscar información para asociar identificadores que aparecen en la tabla superior, normalmente correspondientes a conjuntos de sondas o transcritos dependiendo del tipo de array, con nombres más familiares o intuitivos como pueden ser el símbolo del gen (`SYMBOL`) o el identificador Entrez Gene (`ENTREZID`).
+
+```{r anotacion2, warning = FALSE, message = FALSE}
+anotaciones2 <- AnnotationDbi::select(hgu133plus2.db, keys = rownames(filteredData2), columns = c("ENTREZID", "SYMBOL"))
+head(anotaciones2)
+```
+
+
+Una vez se tienen las anotaciones de todos los genes de este array, se combinaran estos nombres con los genes obtenidos en la `topTab2`, para así identificarlos con su Entrez ID y el símbolo del gen.
+
+```{r anotacion topTab2, warning = FALSE, message = FALSE}
+topTabAnotada2 <- topTab2 %>%
+    mutate(PROBEID = rownames(topTab2)) %>%
+    left_join(anotaciones2) %>%
+    arrange(P.Value) %>%
+    dplyr::select(7, 8, 9, 1:6)
+
+head(topTabAnotada2)
+```
+
+
+Se almacenan los genes epresados diferencialmente entre los dos tipos de muestras en un archivo .xlsx para, después, poder comparar los genes obtenidos con los anotados anteriormente en la búsqueda bibliográfica. 
+
+```{r guardar en mi directorio los genes}
+ruta_GSE46687 <- file.path(workingDir, "genes_diferenciales_GSE46687.xlsx")
+
+write.xlsx(topTabAnotada2, file = ruta_GSE46687)
+```
+
+
+Por lo tanto, en el objeto `topTabAnotada2` se ha obtenido una lista de genes diferencialmente expresados más legible. 
+
+#### Visualización de los genes diferencialmente expresados
+
+Puede obtenerse una visualización de la expresión diferencial global mediante **diagramas de volcán (volcan plot)**. Estos gráficos muestran si hay muchos o pocos genes con un gran cambio de pliegue y significativamente expresados o si este número es bajo. Estos gráficos representan en el eje X los cambios de expresión en escala logarítmica (efecto biológico) y en el eje Y el logaritmo negativo del valor p (efecto estadístico). 
+
+
+```{r volcanoplot 2, warning = FALSE, message = FALSE, echo = FALSE}
+# Obtiene los nombres de los genes asociados a las filas de los resultados utilizando la BBDD de anotaciones 'hgu133plus2.db'
+genenames2 <- AnnotationDbi::select(hgu133plus2.db, rownames(fit.main2), c("SYMBOL"))$SYMBOL
+
+# Genera un gráfico de volcado para visualizar los resultados del análisis de expresión diferencial
+volcanoplot(fit.main2, highlight = 8, names = genenames2, main = paste("Genes diferencialmente expresados en un dataset", colnames(cont.matrix2), sep = "\n"))
+
+# Dibuja líneas horizontales en el gráfico para resaltar los genes con log fold change de ±1.2
+abline(v = c(-1.2, 1.2))
+```
+
+
+Los genes seleccionados con expresión diferencial también pueden visualizarse mediante un **mapa de calor (heatmap)**. Estos gráficos utilizan paletas de colores para resaltar distintos valores -en este caso, expresiones significativamente diferenciales positivas (regulación al alza) o negativas (regulación a la baja).
+
+Para hacer el mapa de calor se emplearán los genes seleccionados en los pasos anteriores. 
+
+```{r heatmap 2, echo = FALSE}
+selectedRows2 <- rownames(filteredData2) %in% rownames(topTab2)
+selectedData2 <- filteredData2[selectedRows2, ]
+coolmap(selectedData2, cluster.by = "de pattern", linkage.row = "complete", linkage.col = "complete", show.dendrogram = "both", main = "Heatmap XO.vs.XX FC>=1.2")
+```
+
+
+#### Estudio de significación biológica
+
+Una vez obtenida una lista de genes que caracteriza la diferencia entre dos condiciones, hay que interpretarla, aunque esto requiere una buena comprensión del problema biológico subyacente.
+
+Con este objetivo, este tipo de análisis busca establecer si, dada una lista de genes seleccionados por expresarse diferencialmente entre dos condiciones, las funciones, procesos biológicos o vías moleculares que los caracterizan aparecen en esta lista con mayor frecuencia que entre el resto de genes analizados.
+
+Para llevarlo a cabo, se empleará el **análisis de enriquecimiento básico** y se necesitarán dos colecciones de genes:
+
+- La lista seleccionada
+
+- El universo de genes es decir todos los genes que se han incluído en el análisis (todos los del chip)
+
+La mayoría de programas necesitan que los identificadores de los genes sean en formato “ENTREZ” por lo que se preparan ambas listas a la vez.
+
+```{r lista entrez 2, message = FALSE, warning = FALSE}
+# Se extraen todas las sondas y se convierten a EntrezID
+probesUniverse2 <- rownames(filteredData2)
+entrezUniverse <- AnnotationDbi::select(hgu133plus2.db, probesUniverse2, "ENTREZID")$ENTREZID
+
+# Se extraen las sondas de los datos seleccionados y se convierten a EntrezID
+topProbes2 <- rownames(selectedData2)
+entrezTop2 <- AnnotationDbi::select(hgu133plus2.db, topProbes2, "ENTREZID")$ENTREZID
+
+# Eliminación de posibles duplicados
+topGenes2 <- entrezTop2[!duplicated(entrezTop2)]
+entrezUniverse <- entrezUniverse[!duplicated(entrezUniverse)]
+```
+
+
+Por lo tanto, se tienen 2 listas Entrez: 
+
+- **topGenes2:** con los Entrez de las sondas seleccionadas.
+
+- **entrezUniverse:** con los Entrez de todas las sondas del array.
+
+Se pueden utilizar muchos paquetes para realizar un análisis de enriquecimiento genético. Cada uno de ellos realiza un análisis ligeramente diferente, pero las ideas subyacentes son las mismas.
+
+```{r GOhyper 2}
+GOparams2 <- new("GOHyperGParams", geneIds = topGenes2, universeGeneIds = entrezUniverse,
+    annotation = "hgu133plus2.db", ontology = "BP", pvalueCutoff = 0.01)
+
+# Test de Fisher
+
+GOhyper2 <- hyperGTest(GOparams2)
+
+head(summary(GOhyper2), n = 10)
+```
+
+
+Estas son las categorías del Gene Ontology que están más enriquecidas y el p-valor que corresponde a cada una. El valor `OddsRatio` muestra cuantas veces más abundante es ese Gene Ontology de lo que se esperaría. Por lo tanto, cuanto mayor sea este número, esta catergoría será más importante, aunque en este caso se obtienen números bastante elevados. 
+
+```{r}
+dim(summary(GOhyper2))
+```
+
+En total se han obtenido 88 categorías GO diferentes. Antes de finalizar el análisis, se muestran gráficamente las funciones principales de los genes diferencialmente expresados.
+
+```{r listOfSelected2, warning = FALSE, message = FALSE}
+# Filtra genes con ajuste de p-valor menor a 0.05
+whichGenes2 <- topTab2["adj.P.Val"] < 0.05
+
+# Obtiene los identificadores de fila (nombres de genes) que cumplen el criterio
+selectedIDs2 <- rownames(topTab2)[whichGenes2]
+
+# Obtén los identificadores ENTREZID correspondientes a los nombres de genes seleccionados
+EntrezIDs2 <- AnnotationDbi:::select(hgu133plus2.db, selectedIDs2, c("ENTREZID"))
+
+# Extrae la columna ENTREZID del resultado para obtener un vector de identificadores
+EntrezIDs2 <- EntrezIDs2$ENTREZID
+
+# Crea una lista con un solo elemento que contiene los identificadores ENTREZID seleccionados
+listOfSelected2 <- list(EntrezIDs2)
+
+# Obtiene el nombre de la variable (topTab2) y lo usa como nombre para la lista
+topTabName2 <- deparse(substitute(topTab2))
+names(listOfSelected2) <- topTabName2
+
+# Imprime la longitud de la lista
+sapply(listOfSelected2, length)
+```
+
+
+```{r genes mapeados}
+# Obtiene los genes mapeados a términos GO (Gene Ontology) para Homo sapiens
+mapped_genes2GO <- mappedkeys(org.Hs.egGO)
+
+# Obtiene los genes mapeados a vías KEGG para Homo sapiens
+mapped_genes2KEGG <- mappedkeys(org.Hs.egPATH)
+
+# Combina los conjuntos de genes mapeados a términos GO y vías KEGG usando la unión
+# Esto crea un conjunto único de genes que están asociados a términos GO o vías KEGG
+mapped_genes <- union(mapped_genes2GO , mapped_genes2KEGG)
+```
+
+
+```{r enrich result 2}
+# Crea una nueva lista de datos llamada listOfData2 copiando listOfSelected2
+listOfData2 <- listOfSelected2
+
+# Obtiene los nombres de las comparaciones de la nueva lista de datos
+comparisonsNames2 <- names(listOfData2)
+
+# Define el conjunto de genes universo (todos los genes asociados a términos GO o vías KEGG)
+universe <- mapped_genes
+
+# Itera sobre cada elemento en la lista de datos
+for (i in 1:length(listOfData2)){
+  # Obtiene los genes para la comparación actual
+  genesIn2 <- listOfData2[[i]]
+  # Obtiene el nombre de la comparación actual
+  comparison2 <- comparisonsNames2[i]
+  # Realiza el enriquecimiento de vías para la comparación actual
+  enrich.result2 <- enrichPathway(gene = genesIn2,
+                                 pvalueCutoff = 0.1,
+                                 readable = T,
+                                 pAdjustMethod = "BH",
+                                 organism = "human",
+                                 universe = universe)
+  # Imprime las primeras filas del resultado del enriquecimiento
+  head(enrich.result2)
+}
+```
+
+
+```{r enrichplot 2}
+enrichplot::cnetplot(enrich.result2, categorySize = "geneNum", schowCategory = 15, vertex.label.cex = 0.75)
+```
+
+# Análisis diferencial genómico de dos bases de datos
+
+En este informe se va a realizar un análisis de microarrays a partir de datos de dos estudios publicados y depositados en "*Gene Expression Omnibus*". Los estudios seleccionados son los codificados con los identificadores GEO **GSE46687** y **GSE58435** ambos incluídos en la plataforma *Affymetrix Human Genome U133 Plus 2.0 Array*. 
+
+Por un lado, el estudio **GSE46687** analiza la expresión génica diferencial en células mononucleares de sangre periférica (PBMC) de 45Xm, 45Xp y mujeres control 46XX mediante microarrays para investigar los cambios en la expresión génica de todo el genoma entre los pacientes con Síndrome de Turner con monosomía XO y las mujeres sin monosomía (sin tener en cuenta el tipo de herencia del cromosoma X). 
+
+Por otro lado, el estudio codificado como **GSE58435** tiene como objetivo comparar la expresión de ARNm en líquido amniótico en el 2º trimestre entre 5 fetos con Síndrome de Turner y 5 muestras control (Massingham, LJ *et al.*).
+
+## Selección del dataset
+
+Se ha seleccionado dos dataset:
+
+- **GSE46687:** trabajo de Cheng CM *et al.* llamado Gene Expression Profiling in 45X Turner Syndrome patients.
+- **GSE58435:** estudio Amniotic fluid RNA gene expression profiling provides insights into the phenotype of Turner syndrome de Massingham, LJ *et al.*
+
+Como se puede observar en las imágenes **Imagen 13** e **Imagen 14**, el primer estudio se compone de 36 muestras y el segundo de 10. Además, las anotaciones de los genes de ambos estudios se encuentran en *Affymetrix Human Genome U133 Plus 2.0 Array*. 
+
+- **XX**: 10 réplicas de muestras de control (*wild type*).
+
+- **Xm**: 16 réplicas de muestras con Síndrome de Turner con el cromosoma X heredado de la madre 
+ 
+- **Xp**: 10 réplicas de muestras con Síndrome de Turner con el cromosoma X heredado del padre 
+
+
+Sin embargo, las muestras del estudio de Massingham, LJ *et al.* se dividen en dos grupos: 
+
+**- Turner_AF:** 5 réplicas de muestras con Síndrome de Turner
+
+**- Control_AF:** 5 réplicas de muestras de control
+
+Por lo tanto, las muestras de los dos estudios se agruparán en dos grupos: muestras de control y muestras de individuos con Síndrome de Turner. Además, como se ha analizado anteriormente, las muestras del estudio GSE46687 de tipo Xm y Xp se pueden agrupar todas en grupo. Teniendo todo esto en cuenta, se obtiene el siguiente esquema de muestras en total: 
+
+- **XX:** 15 réplicas de muestras de control
+
+- **XO**: 31 réplicas de muestras con Síndrome de Turner (*wildtype*)
+
+Se analizarán un total de 46 muestras. 
+
+## Creación del objeto “targets”
+
+En la carpeta `Data` donde se encuentran los archivos .CEL, se ha creado un archivo .csv llamado "targets3". Este archivo contiene la información de las diferentes muestras del experimento para poder crear un objeto *AnnotatedDataFrame*.
+
+![Contenido del inicio del archivo targets3.csv](E:/TFM/Captura11.jpg) 
+
+
+## Carga y lectura de los datos 
+
+Para poder comenzar con el preprocesado de los datos, primero se lee el archivo `targets3.csv` y se almacenan las columnas `ShortName` y `Colors` de este archivo en dos nuevas variables para poder crear los gráficos posteriormente. Como se puede observar, el objeto `targetsDF3` contiene el dataframe que se ha creado anteriormente con la información de las muestras y algunos campos importantes para el análisis.
+
+```{r targetsDF3, sampleNames3, sampleColor3}
+targetsDF3 <- read.csv2(file = file.path(dataDir, "targets3.csv"), header = TRUE, sep = ";")
+
+sampleNames3 <- as.character(targetsDF3$ShortName)
+sampleColor3 <- as.character(targetsDF3$Colors)
+
+targets3 <- AnnotatedDataFrame(targetsDF3)
+
+targetsDF3
+```
+
+
+A continuación, se guardan los nombres de los archivos .CEL guardados en el dataframe `targetsDF3` en un nuevo objeto llamado `CELfiles3` y se cargan los archivos del directorio que tengan el mismo nombre que los guardados en ese objeto. Estos archivos se almacenan en un objeto ExpressionSet llamado `rawData3`. 
+
+```{r creacion rawData3, warning = FALSE, message = FALSE}
+CELfiles3 <- targetsDF3$fileName
+rawData3 <- read.celfiles(file.path(dataDir, CELfiles3), phenoData = targets3)
+```
+
+
+Una vez cargados todos los archivos, se analiza el objeto ExpressionSet `rawData3`, donde se incluyen las 46 muestras a analizar.
+
+```{r rawData3}
+rawData3
+```
+
+
+Como se puede observar, el archivo contiene 46 muestras y una suma de 1354896 sondas en total. Además, `Annotation` indica el paquete de anotaciones necesario para poder realizar este análisis, el mismo que se ha utilizado anteriormente.
+
+## Preprocesado de los datos
+
+### Exploración y control de calidad
+
+Mediante un **boxplot** se muestra como es la distribución de los valores. 
+
+```{r boxplot rawData3, echo = FALSE}
+boxplot(rawData3, which = "all", las = 2, main = "Distribución de intensidad de XO vs XX de dos datasets", cex.axis = 0.7, col = sampleColor3, names = sampleNames3)
+```
+
+
+Mediante un **clustering jerárquico** se muestra como se agrupan estas muestras. 
+
+```{r clustering rawData3, echo = FALSE}
+clust.euclid.average3 <- hclust(dist(t(exprs(rawData3))), method = "average")
+plot(clust.euclid.average3, labels = sampleNames3, main = "Clustering jerárquico de XO vs XX de dos datasets", cex = 0.7, hang = -1)
+```
+
+
+En el **análisis de componentes principales**, se buscan las principales fuentes de variabilidad en los datos reduciendo las dimensiones.
+
+```{r PCA rawData3, warning = FALSE, message = FALSE, echo = FALSE}
+targetsDF3$Grupos <- as.factor(targetsDF3$Grupos)
+affycoretools::plotPCA(object = exprs(rawData3), groups = as.numeric(targetsDF3$Grupos), x.coord = NULL, y.coord = NULL, addtext = targetsDF3$ShortName, main = "PCA de XO vs XX de dos datasets", legend = FALSE)
+```
+
+
+#### Control de calidad con el paquete arrayQualityMetrics
+
+Con este paquete se obtienen los mismos gráficos que los anteriores pero todos a la vez en un archivo. Además, se observa si existe alguna muestra que tenga algún problema de outliers. 
+
+```{r arrayqualitymetrics rawData3, eval = FALSE}
+arrayQualityMetrics(rawData3, reporttitle = "QC_RawData3", force = TRUE)
+```
+
+
+### Normalización
+
+Antes de comenzar con el análisis de expresión diferencial y vistos los problemas que muestran algunas de las muestras, es necesario hacer que los arrays sean comparables entre sí y tratar de reducir, y si es posible eliminar, toda la variabilidad en las muestras que no se deba a razones biológicas. El proceso de normalización trata de asegurar que las diferencias de intensidad presentes en el array reflejen la expresión diferencial de los genes, en lugar de sesgos artificiales debidos a cuestiones técnicas. El método más utilizado para la normalización de arrays es el método RMA.
+
+```{r normData3}
+normData3 <- rma(rawData3)
+normData3
+```
+
+
+Analizando la calidad de los datos tras la normalización:
+
+```{r boxplot normData3, echo = FALSE}
+boxplot(normData3, las = 2, main = "Distribución de intensidad de normalized XO vs XX de dos datasets", cex.axis = 0.7, col = sampleColor3, names = sampleNames3)
+```
+
+
+Además, se crea un nuevo archivo QC mediante el paquete `arrayQualityMetrics` para los datos normalizados. 
+
+```{r arrayqualitymetrics normData3, eval = FALSE}
+arrayQualityMetrics(normData3, reporttitle = "QC_NormData3", force = TRUE)
+```
+
+                
+Además, en el **clustering jerárquico** se observa como se agrupan las muestras tras la normalización.
+
+```{r clustering normData3, echo = FALSE}
+clust.euclid.average3 <- hclust(dist(t(exprs(normData3))), method = "average")
+plot(clust.euclid.average3, labels = sampleNames3, main = "Clustering jerárquico de normalized XO vs XX de dos datasets", cex = 0.7, hang = -1)
+```
+
+
+```{r PCA normData3, warning = FALSE, message = FALSE, echo = FALSE}
+targetsDF3$Grupos <- as.factor(targetsDF3$Grupos)
+affycoretools::plotPCA(object = exprs(normData3), groups = as.numeric(targetsDF3$Grupos), x.coord = NULL, y.coord = NULL, addtext = targetsDF3$ShortName, main = "PCA de normalized XO vs XX de dos datasets", legend = FALSE)
+```
+
+
+### Filtrado no específico
+
+A continuación, se van a eliminar algunos genes sin basarnos en el efecto que se está estudiando, sino por alguna característica que se considere no relacionada con el tema de estudio, es decir, aquellos genes cuya variabilidad puede atribuirse a la variación aleatoria; por ejemplo, se pueden eliminar los genes que varían poco de un grupo a otro. Además, como en este caso se dispone del paquete de anotación (hgu133plus2.db), también se puede utilizar para eliminar conjuntos de sondas que no tengan asociado un identificador de gen (identificador Entrez, por ejemplo).
+
+Empleando la función `nsFilter` del paquete `genefilter` de Bioconductor se eliminan genes basándose en un umbral de variabilidad mencionado anteriormente.
+
+```{r anotacion 3}
+annotation(normData3) <- "hgu133plus2.db"
+normData_filtered3 <- nsFilter(normData3, var.func = IQR, var.cutoff = 0.75, var.filter = TRUE, require.entrez = TRUE, filterByQuantile = TRUE, feature.exclude = "^AFFX")
+
+normData_filtered3
+```
+
+
+Analizando los resultados obtenidos, se han eliminado los siguientes genes: 
+
+- `r normData_filtered3$filter.log$numDupsRemoved` valores duplicados
+
+- `r normData_filtered3$filter.log$numLowVar` genes que tienen baja variabilidad 
+
+- `r normData_filtered3$filter.log$numRemoved.ENTREZID` genes que no tienen ID Entrez
+
+Con este filtraje no específico se ha obtenido un dataset con menor número de genes, habiendo descartado los genes que con una alta probabilidad no van a estar relacionados con el estudio. 
+
+Los genes restantes se han almacenado en la variable `FilteredEset`.
+
+```{r filteredData3}
+filtered_normData3 <- normData_filtered3$eset
+filteredData3 <- exprs(filtered_normData3)
+colnames(filteredData3) <- pData(normData_filtered3$eset)$ShortName
+```
+
+
+## Análisis
+
+La selección de genes expresados de forma diferencial consiste básicamente en realizar algún tipo de prueba, normalmente por genes, para comparar la expresión génica entre grupos.
+
+### La matríz de diseño
+
+El primer paso para el análisis basado en modelos lineales es crear la matriz de diseño. Básicamente es una tabla que describe la asignación de cada muestra a un grupo o condición experimental. Tiene tantas filas como muestras y tantas columnas como grupos, ya que en este caso se necesita el modelo de un factor, teniendo 2 tipos de muestras que se diferencian solo en un único factor. Cada fila contiene un uno en la columna del grupo al que pertenece la muestra y un cero en las demás.
+
+```{r matriz de diseño 3}
+treat3 <- pData(filtered_normData3)$Grupos
+
+treat3 <- factor(treat3)
+design3 <- model.matrix(~0 + treat3)
+
+rownames(design3) <- sampleNames3
+colnames(design3) <- levels(treat3)
+
+design3
+```
+
+
+### La matríz de contrastes: definición de comparaciones
+
+La matriz de contrastes se utiliza para describir las comparaciones entre grupos. Consta de tantas columnas como comparaciones y tantas filas como grupos. Una comparación entre grupos se representa mediante un "1" y un "-1" en las filas de grupos a comparar. 
+
+```{r matriz de contraste 3}
+cont.matrix3 <- makeContrasts(XO.vs.XX = XO - XX, levels = design3)
+comparisonName3 <- "Efecto de la monosomía X frente al control XX"
+cont.matrix3
+```
+
+
+### Estimación del modelo y selección de genes
+
+Una vez definida la matriz de diseño y los contrastes, se puede proceder a estimar el modelo, estimar los contrastes y realizar las pruebas de significación que llevarán a decidir, para cada gen y cada comparación, si pueden considerarse de expresión diferencial. Para ello, se utilizará el paquete `limma`. 
+
+```{r estimacion del modelo 3}
+fit3 <- lmFit(filteredData3, design3)
+fit.main3 <- contrasts.fit(fit3, cont.matrix3)
+fit.main3 <- eBayes(fit.main3)
+```
+
+
+## Análisis de genes diferencialmente expresados utilizando p = 0.1
+
+El paquete `limma` implementa la función `topTable` que contiene, para un contraste dado, una lista de genes ordenados de menor a mayor p-valor que pueden considerarse de mayor a menor expresión diferencial. 
+
+```{r topTab3}
+topTab3 <- topTable(fit.main3, number = nrow(fit.main3), coef = "XO.vs.XX", adjust = "fdr", lfc = 1, p.value = 0.1)
+dim(topTab3)
+```
+
+
+Echando un vistazo a las primeras líneas del topTable, se pueden observar los genes que más cambian su expresión entre XX y XO, ordenados por su p-valor (de menor a mayor).
+
+```{r}
+head(topTab3)
+```
+
+
+Como se puede observar, la primera columna del `topTable3.2` contiene el ID del fabricante (*Affymetrix*) para cada conjunto de sondas. El siguiente paso es adivinar que gen corresponde a cada ID de Affymetrix, utilizando para ello la anotación de genes.
+
+Una vez que se ha obtenido la tabla con los genes diferencialmente expresados, denominada `topTab3` es útil proporcionar información adicional sobre las características que se han seleccionado. Este proceso se denomina "anotación" y lo que hace es buscar información para asociar identificadores que aparecen en la tabla superior, normalmente correspondientes a conjuntos de sondas o transcritos dependiendo del tipo de array, con nombres más familiares o intuitivos como pueden ser el símbolo del Gen o el identificador Entrez Gene.
+
+
+```{r anotaciones 3, warning = FALSE, message = FALSE}
+anotaciones3 <- AnnotationDbi::select(hgu133plus2.db, keys = rownames(filteredData3), columns = c("ENTREZID", "SYMBOL"))
+head(anotaciones3)
+```
+
+
+Una vez se tienen las anotaciones de todos los genes de este array, se combinaran estos nombres con los genes obtenidos en la `topTab3`, para así identificarlos con su Entrez ID y el símbolo del gen.
+
+```{r topTab3 anotada, message = FALSE, warning = FALSE}
+topTabAnotada3 <- topTab3 %>%
+    mutate(PROBEID = rownames(topTab3)) %>%
+    left_join(anotaciones3) %>%
+    arrange(P.Value) %>%
+    dplyr::select(7, 8, 9, 1:6)
+
+head(topTabAnotada3)
+```
+
+
+Por lo tanto, en el objeto `topTabAnotada3.` se ha obtenido una lista de genes diferencialmente expresados más legible. 
+
+Se almacenan los genes epresados diferencialmente entre los dos tipos de muestras en un archivo .xlsx para, después, poder comparar los genes obtenidos con los anotados anteriormente en la búsqueda bibliográfica. 
+
+```{r guardar en mi directorio los genes 3}
+ruta_GSE46687yGSE58435 <- file.path(workingDir, "genes_diferenciales_GSE46687yGSE58435.xlsx")
+
+write.xlsx(topTabAnotada3, file = ruta_GSE46687yGSE58435)
+```
+
+
+### Visualización de los genes diferencialmente expresados
+
+#### Volcano plot
+
+Puede obtenerse una visualización de la expresión diferencial global mediante diagramas de volcán. Estos gráficos muestran si hay muchos o pocos genes con un gran cambio de pliegue y significativamente expresados o si este número es bajo. Estos gráficos representan en el eje X los cambios de expresión en escala logarítmica (efecto biológico) y en el eje Y el logaritmo negativo del valor p (efecto estadístico). 
+
+```{r volcanoplot 3, warning = FALSE, message = FALSE, echo = FALSE}
+genenames3 <- AnnotationDbi::select(hgu133plus2.db, rownames(fit.main3), c("SYMBOL"))$SYMBOL
+volcanoplot(fit.main3, highlight = 10, names = genenames3, main = paste("Genes diferencialmente expresados con p =< 0.1", colnames(cont.matrix3), sep = "\n"))
+abline(v = c(-1, 1))
+```
+
+
+Los genes que aparecen en los primeros puestos de la `topTab3`, es decir, los que están más expresados diferencialmente, son lo que aparecen fuera de las lineas verticales (los cuales márcan el log fold = 1) y arriba. 
+
+
+#### Heatmap
+
+Los genes seleccionados con expresión diferencial pueden visualizarse mediante un mapa de calor. Estos gráficos utilizan paletas de colores para resaltar distintos valores -en este caso, expresiones significativamente diferenciales positivas (regulación al alza) o negativas (regulación a la baja).
+
+Para hacer el mapa de calor se emplearán los genes seleccionados en los pasos anteriores. 
+
+```{r}
+selectedRows3 <- rownames(filteredData3) %in% rownames(topTab3)
+selectedData3 <- filteredData3[selectedRows3, ]
+coolmap(selectedData3, cluster.by = "de pattern", linkage.row = "complete", linkage.col = "complete", show.dendrogram = "both", main = "Heatmap XO.vs.XX p =< 0.1")
+```
+
+
+### Estudio de significación biológica 
+
+Una vez obtenida una lista de genes que caracteriza la diferencia entre dos condiciones, hay que interpretarla biológicamente. 
+
+Con este objetivo, este tipo de análisis busca establecer si, dada una lista de genes seleccionados por expresarse diferencialmente entre dos condiciones, las funciones, procesos biológicos o vías moleculares que los caracterizan aparecen en esta lista con mayor frecuencia que entre el resto de genes analizados.
+
+Para llevar a cabo esto, se empleará el **análisis de enriquecimiento básico**.
+
+```{r lista Entrez 3, message = FALSE, warning = FALSE}
+# Se extraen las sondas de los datos seleccionados y se convierten a EntrezID
+topProbes3 <- rownames(selectedData3)
+entrezTop3 <- AnnotationDbi::select(hgu133plus2.db, topProbes3, "ENTREZID")$ENTREZID
+
+#Eliminación de posibles duplicados
+topGenes3 <- entrezTop3[!duplicated(entrezTop3)]
+```
+
+
+Por lo tanto, se tienen 2 listas Entrez: 
+
+- **topGenes:** con los Entrez de las sondas seleccionadas.
+
+- **entrezUniverse:** con los Entrez de todas las sondas del array.
+
+Se pueden utilizar muchos paquetes para realizar un análisis de enriquecimiento genético. Cada uno de ellos realiza un análisis ligeramente diferente, pero las ideas subyacentes son las mismas.
+
+```{r GOhyper 3}
+GOparams3 <- new("GOHyperGParams", geneIds = topGenes3, universeGeneIds = entrezUniverse,
+    annotation = "hgu133plus2.db", ontology = "BP", pvalueCutoff = 0.05)
+
+# Test de Fisher
+
+GOhyper3 <- hyperGTest(GOparams3)
+
+head(summary(GOhyper3), n = 10)
+```
+
+
+Estas son las categorías del Gene Ontology que están más enriquecidas y el p-valor que corresponde a cada una. El valor `OddsRatio` muestra cuantas veces más abundante es ese Gene Ontology de lo que se esperaría. Por lo tanto, cuanto mayor sea este número, esta catergoría será más importante. El numéro de categorías GO diferentes obtenidas es:
+
+```{r}
+dim(summary(GOhyper3))
+```
+
+
+Antes de finalizar el análisis, se muestran gráficamente las funciones principales de los genes diferencialmente expresados.
+
+```{r listOfSelected3 lista entrez 3, warning = FALSE, message = FALSE}
+whichGenes3 <-topTab3["adj.P.Val"]<0.15
+selectedIDs3 <- rownames(topTab3)[whichGenes3]
+
+EntrezIDs3 <- AnnotationDbi:::select(hgu133plus2.db, selectedIDs3, c("ENTREZID"))
+
+EntrezIDs3 <- EntrezIDs3$ENTREZID
+
+listOfSelected3 <- list(EntrezIDs3)
+topTabName3 <- deparse(substitute(topTab3))
+names(listOfSelected3) <- topTabName3
+
+sapply(listOfSelected3, length)
+```
+
+
+```{r enrich results 3}
+listOfData3 <- listOfSelected3
+comparisonsNames3 <- names(listOfData3)
+
+for (i in 1:length(listOfData3)){
+  genesIn3 <- listOfData3[[i]]
+  comparison3 <- comparisonsNames3[i]
+  enrich.result3 <- enrichPathway(gene = genesIn3,
+                                 pvalueCutoff = 0.1,
+                                 readable = T,
+                                 pAdjustMethod = "BH",
+                                 organism = "human",
+                                 universe = universe)
+  head(enrich.result3)
+}
+```
+
+
+```{r enrichplot 3}
+enrichplot::cnetplot(enrich.result3, categorySize = "geneNum", schowCategory = 15, vertex.label.cex = 0.75)
+```
+
+
+# Referencias
+
+Zupkovitz, G., Tischler, J., Posch, M., Sadzak, I., Ramsauer, K., Egger, G., ... & Seiser, C. (2006). Negative and Positive Regulation of Gene Expression by Mouse Histone Deacetylase1. *Molecular and cellular biology, 26*(21), 7913-7928. DOI: 10.1128/MCB.01220-06
+
+Bioconductor. (2023). *Bioconductor, Open Source Software for Bioinformatics.* https://www.bioconductor.org/
+
+Sánchez, Pla. [Alex]. (2022). *ADO-04 - Ejemplo de análisis (1) - Los datos* [recurso de aprendizaje audiovisual]. Universidad Oberta de Catalunya (UOC).
+
+Sánchez, Pla. [Alex]. (2022). *ADO-04 - Ejemplo de análisis (2a) - Lectura y preprocesado* [recurso de aprendizaje audiovisual]. Universidad Oberta de Catalunya (UOC).
+
+Sánchez, Pla. [Alex]. (2022). *ADO-04 - Ejemplo de análisis (2b) - Filtraje no específico* [recurso de aprendizaje audiovisual]. Universidad Oberta de Catalunya (UOC).
+
+Sánchez, Pla. [Alex]. (2022). *ADO-04 - Ejemplo de análisis (3) - Selección de genes y análisis de enriquecimiento*  [recurso de aprendizaje audiovisual]. Universidad Oberta de Catalunya (UOC).
+
+Analisis de datos omicos - Materiales para un curso (ASPteching). (2022). *GitHub*. https://github.com/ASPteaching/Analisis_de_datos_omicos-Materiales_para_un_curso
+
+Analisis de datos omicos - Ejemplo 1 - Microarrays (ASPteching). (2022). *GitHub*. https://github.com/ASPteaching/Analisis_de_datos_omicos-Ejemplo_1-Microarrays
+
+Omics Data Analysis - Case Study 1 - Microarrays (ASPteching). (2022). *GitHub*. https://github.com/ASPteaching/Omics_Data_Analysis-Case_Study_1-Microarrays
